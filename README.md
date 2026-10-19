@@ -483,6 +483,3 @@ For a campus-scale project, serverless functions, a small database, and object s
 | PIYUSHA | Developer |
 
 
-## 📄 License
-
-Released under the [MIT License](LICENSE).
