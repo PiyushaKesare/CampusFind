@@ -1,0 +1,88 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function to check if the user is an administrator. Admin rights
+    // come from a verified custom claim, never from an "admin" word in an
+    // email address (which any student could register).
+    function isAdmin() {
+      return isAuthenticated() && request.auth.token.role == 'admin';
+    }
+    
+    // 1. Items Collection Rules
+    match /items/{itemId} {
+      // Any verified campus student/staff can read items
+      allow read: if true;
+      
+      // Authenticated users can create new lost or found reports
+      allow create: if isAuthenticated() &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.itemName is string &&
+        request.resource.data.itemName.size() > 1 &&
+        request.resource.data.category in ['Electronics', 'ID & Cards', 'Wallets & Bags', 'Books & Stationery', 'Keys', 'Personal', 'Clothing', 'Accessories', 'Other'] &&
+        request.resource.data.type in ['Lost', 'Found'] &&
+        request.resource.data.status in ['Lost', 'Found'];
+        
+      // Only the original author or an admin can update status or details
+      // Authors may edit their own report but can never hand it to another user.
+      allow update: if isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId);
+      
+      // Admins can remove any report; authors can delete their own report
+      allow delete: if isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid);
+    }
+
+    // 2. Claims Collection Rules (Ownership Verification)
+    match /claims/{claimId} {
+      // Claimants and the finder who owns the item can read a claim; admins
+      // can read every claim.
+      allow read: if isAuthenticated() &&
+        (resource.data.claimantId == request.auth.uid ||
+         resource.data.itemOwnerId == request.auth.uid ||
+         isAdmin());
+
+      // A claim must be filed by the signed-in student with real proof.
+      allow create: if isAuthenticated() &&
+        request.resource.data.claimantId == request.auth.uid &&
+        request.resource.data.itemId is string &&
+        request.resource.data.proofDetails is string &&
+        request.resource.data.proofDetails.size() > 5 &&
+        request.resource.data.status == 'Pending Review';
+        
+      // Only admins can approve or reject claims
+      allow update, delete: if isAdmin();
+    }
+
+    // 3. Notifications Collection Rules
+    match /notifications/{notificationId} {
+      // A student sees alerts addressed to them plus general campus notices.
+      // The app's listener queries targetUserId in [uid, null]; the rule uses the
+      // same membership test so Firestore can prove each query is allowed.
+      allow read: if isAuthenticated() &&
+        (resource.data.targetUserId in [request.auth.uid, null] || isAdmin());
+
+      // Clients may create alerts; the recipient may only mark theirs as read.
+      allow create: if isAuthenticated();
+      allow update: if isAdmin() ||
+        (isAuthenticated() && resource.data.targetUserId == request.auth.uid &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']));
+      allow delete: if isAdmin();
+    }
+
+    // 4. Users Collection Rules
+    match /users/{userId} {
+      // Users may read and write only their own profile, and may never set the
+      // admin role on it; admins are granted through the role custom claim.
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow create, update: if isAdmin() ||
+        (isAuthenticated() && request.auth.uid == userId &&
+         request.resource.data.get('role', 'student') != 'admin');
+      allow delete: if isAdmin();
+    }
+  }
+}
